@@ -2,7 +2,7 @@
 # Exercise 1:
 
 # Load necessary libraries
-pacman::p_load(ggplot2, tidyverse, MASS, caret, ggpubr)
+pacman::p_load(ggplot2, tidyverse, MASS, caret, ggpubr, maxLik)
 
 # Exercise 1
 
@@ -24,10 +24,8 @@ data.gen <- function(n, beta, X1.min, X1.max, X2.P1) {
   X2 <- rbinom(n, 1, X2.P1)
   X <- cbind(X0, X1, X2)
   y <- rep(0, n)
-  y.pi <- 1 / (1 + exp(-(X %*% beta)))
-  for (i in 1:n) {
-    y[i] <- rbinom(1, 1, y.pi[i])
-  }
+  pi_x <- 1 / (1 + exp(-(X %*% beta)))
+  y <- rbinom(n, 1, prob = pi_x)
   data <- cbind.data.frame(X, y)
   return(data)
 }
@@ -66,56 +64,101 @@ ggplot(data.train, aes(X2)) +
 
 # b)
 # Estimate betas via ML (Logistic Regression)
-Logit <- glm(y ~ X1 + X2, data = data.train, family = binomial)
+Logit <- glm(y ~ X1 + X2, data = data.train, family = binomial(link = "logit"))
 summary(Logit)
 (beta.logit <- Logit$coefficients)
 
-# Calculate the estimated log-odds and probabilities
-(logits.train <- Logit$fitted.values) # log odds
-(probs.logit.train <- 1 / (1 + exp(-logits.train))) # Pr(Y=1|X)
+# Compared with manually doing ML
 
+loglike<-function(beta) # the likelihood function for the logit model
+{
+  ll <- sum(-data.train$y * log(1 + exp(-(X.train %*% beta))) - 
+              (1 - data.train$y) * log(1 + exp(X.train %*% beta)))
+  return(ll)
+}
+
+# Initialize estimation procedure
+estim <- maxBFGS(loglike, finalHessian = TRUE, start = c(5, 5, 10)) 
+beta.ML <- estim$estimate # give out parameter estimates
+beta.ML
+(beta.logit <- Logit$coefficients)
+
+# Standard Error of the Coefficients
+estim.hess <- estim$hessian 
+# the optimization routine returns the hessian matrix at the last iteration.
+Cov <- -(solve(estim.hess))
+# the covariance matrix is the (negative) inverse of the hessian matrix.
+sde <- sqrt(diag(Cov))#the standard errors are the square root of the diagonal of the inverse Hessian. 
+sde
+stdEr(Logit)
+
+# Prepare some Data for plotting later
 # "True" log odds and probs (never observe in real life)
-true.logits.train <- X.train %*% beta 
-true.probs.train <- 1 / (1 + exp(-true.logits.train))
-
-logits.test <- predict(Logit, newdata = data.test, se = T)
-
-# Check if it's correct
-head(logits.test$fit)
-head(X.test %*% beta.logit)
-
-# Construct 95% CI for the estimates
-lower <- logits.test$fit - 1.96 * logits.test$se.fit # lower bound of log odds
-upper <- logits.test$fit + 1.96 * logits.test$se.fit # upper bound...
-(probs.logit.test <- 1 / (1 + exp(-logits.test$fit)))
-lower <- 1 / (1 + exp(-lower)) 
-upper <- 1 / (1 + exp(-upper))
+logodds.true.train <- X.train %*% beta 
+probs.true.train <- 1 / (1 + exp(-logodds.true.train))
 
 # "True" log odds and probs for test data
-true.logits.test <- X.test %*% beta 
-true.probs.test <- 1 / (1 + exp(-true.logits.test))
+logodds.true.test <- X.test %*% beta 
+probs.true.test <- 1 / (1 + exp(-logodds.true.test))
+
+# Construct 95% CI for the estimated probs
+# Fit the model again to the data.train
+logit.train <- predict(Logit, data.train, se = T)
+logodds.fit.train <- logit.train$fit
+probs.fit.train <- 1 / (1 + exp(-logodds.fit.train))
+lower.train <- logodds.fit.train - 1.96 * logit.train$se.fit # lower bound
+upper.train <- logodds.fit.train + 1.96 * logit.train$se.fit # upper bound
+lower.train <- 1 / (1 + exp(-lower.train)) 
+upper.train <- 1 / (1 + exp(-upper.train))
+
+# Use the estimated betas to fit the test data
+logit.test <- predict(Logit, newdata = data.test, se = T)
+logodds.fit.test <- logit.test$fit
+
+# Check if it's correct
+head(logodds.fit.test)
+head(X.test %*% beta.logit)
+
+lower.test <- logodds.fit.test - 1.96 * logit.test$se.fit # lower bound of log odds
+upper.test <- logodds.fit.test + 1.96 * logit.test$se.fit # upper bound...
+(probs.fit.test <- 1 / (1 + exp(-logodds.fit.test)))
+lower.test <- 1 / (1 + exp(-lower.test)) 
+upper.test <- 1 / (1 + exp(-upper.test))
 
 # MSE and AVE
 y.pred.train <-  c()
 y.pred.test <- c()
+threshold <- 0.65
+
 for (i in 1:n) {
-  if (probs.logit.train[i] >= 0.68) {
+  if (probs.fit.train[i] >= threshold) {
     y.pred.train[i] <- 1
   }
   else {
     y.pred.train[i] <- 0
   }
-  if (probs.logit.test[i] >= 0.6) {
+  if (probs.fit.test[i] >= threshold) {
     y.pred.test[i] <- 1
   }
   else {
     y.pred.test[i] <- 0
   }
 }
-(err.train <- sum(y.pred.train != data.train$y) / length(data.train$y))
-(cfm <- table(y.pred.train, data.train$y))
-(table(y.pred.test, data.test$y))
-(prop.table(cfm))
+(MSE <- sum(y.pred.train != data.train$y) / length(data.train$y))
+(AVE <- sum(y.pred.test != data.test$y) / length(data.test$y))
+
+(cfm.train <- (table(y.pred.train, data.train$y,
+               dnn = c("Predicted", "True"))))
+(addmargins(cfm.train))
+addmargins(prop.table(cfm.train))
+addmargins(prop.table(cfm.train, 2))
+
+(cfm.test <- (table(y.pred.test, data.test$y,
+               dnn = c("Predicted", "True"))))
+(addmargins(cfm.test))
+addmargins(prop.table(cfm.test))
+addmargins(prop.table(cfm.test, 2))
+
 # c)
 
 # d)
@@ -125,30 +168,32 @@ plt.data <- data.frame(X1.train = data.train$X1,
                        X2.test = factor(data.test$X2),
                        y.train = data.train$y,
                        y.test = data.test$y,
-                       probs.train = probs.logit.train,
-                       probs.test = probs.logit.test,
-                       true.probs.train, 
-                       true.probs.test,
-                       upper,
-                       lower) 
+                       probs.train = probs.fit.train,
+                       probs.test = probs.fit.test,
+                       probs.true.train, 
+                       probs.true.test,
+                       upper.train,
+                       lower.train,
+                       upper.test,
+                       lower.test) 
 
 head(plt.data)  
 str(plt.data)
 
-ggplot(plt.data, aes(X1.train, colour = X2.train)) +
-  stat_smooth(aes(x = X1.train, y = y.train), 
-              method = "glm", 
-              method.args = list(family = "binomial"), 
-              se = T,
-              lwd = 2) +
+ggplot(plt.data, aes(X1.train)) +
+  geom_line(aes(y = probs.fit.train, colour = X2.train), size = 2) + 
+  geom_ribbon(aes(ymin = lower.train, 
+                  ymax = upper.train, 
+                  colour = X2.train), 
+              alpha = 0.5) +
   geom_point(aes(y = y.train)) + 
-  geom_point(aes(y = true.probs.train), size = 0.5)
+  geom_point(aes(y = probs.true.train), size = 0.1)
 
 ggplot(plt.data, aes(X1.test)) +
-  geom_line(aes(y = probs.logit.test, colour = X2.test), size = 2) + 
-  geom_ribbon(aes(ymin = lower, ymax = upper, colour = X2.test), alpha = 0.5) +
+  geom_line(aes(y = probs.fit.test, colour = X2.test), size = 2) + 
+  geom_ribbon(aes(ymin = lower.test, ymax = upper.test, colour = X2.test), alpha = 0.5) +
   geom_point(aes(y = y.test)) + 
-  geom_point(aes(y = true.probs.test), size = 0.1)
+  geom_point(aes(y = probs.true.test), size = 0.1)
 
 
 ###############################################################
