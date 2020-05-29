@@ -78,7 +78,7 @@ loglike<-function(b) # the likelihood function for the logit model
 }
 
 # Initialize estimation procedure
-estim <- maxBFGS(loglike, finalHessian = TRUE, start = c(5, 5, 10)) 
+estim <- maxBFGS(loglike, finalHessian = TRUE, start = c(0, 0, 1)) 
 beta.ML <- estim$estimate # give out parameter estimates
 beta.ML
 (beta.logit <- Logit$coefficients)
