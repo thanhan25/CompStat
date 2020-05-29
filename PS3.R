@@ -20,7 +20,7 @@ X2.P1 <- 0.5
 # Define Data Gnerating function
 data.gen <- function(n, beta, X1.min, X1.max, X2.P1) {
   X0 <- rep(1, n)
-  X1 <- runif(n, X1.min, X1.max)
+  X1 <- sort(runif(n, X1.min, X1.max))
   X2 <- rbinom(n, 1, X2.P1)
   X <- cbind(X0, X1, X2)
   y <- rep(0, n)
@@ -70,10 +70,10 @@ summary(Logit)
 
 # Compared with manually doing ML
 
-loglike<-function(beta) # the likelihood function for the logit model
+loglike<-function(b) # the likelihood function for the logit model
 {
-  ll <- sum(-data.train$y * log(1 + exp(-(X.train %*% beta))) - 
-              (1 - data.train$y) * log(1 + exp(X.train %*% beta)))
+  ll <- sum(-data.train$y * log(1 + exp(-(X.train %*% b))) - 
+              (1 - data.train$y) * log(1 + exp(X.train %*% b)))
   return(ll)
 }
 
